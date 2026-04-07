@@ -1,125 +1,154 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>EVPN Lab UI</title>
+  <title>Containerlab Designer</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
-    body { font-family: Arial; }
-    svg { border:1px solid #ccc; background:#f9f9f9; }
+    body { font-family: 'Segoe UI', sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    header { background: #252526; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
+    .main { display: flex; flex: 1; height: calc(100vh - 45px); }
+    #canvas-area { flex: 0 0 75%; position: relative; background: #fff; border-right: 1px solid #ddd; }
+    #sidebar { flex: 0 0 25%; background: #f8f9fa; padding: 15px; overflow-y: auto; }
+    svg, #ghostwire-frame { width: 100%; height: 100%; border: none; }
+    #ghostwire-frame { display: none; }
+    
+    #protocol-panel { position: absolute; top: 15px; left: 15px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px; border: 1px solid #ccc; z-index: 5; }
+    .proto-btn { padding: 5px 10px; margin: 2px; font-size: 10px; border: 1px solid #444; border-radius: 4px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+    .active-bgp { background: #28a745; color: white; }
+    .active-vxlan { background: #007acc; color: white; }
+    .active-ospf { background: #fd7e14; color: white; }
+    .active-isis { background: #6f42c1; color: white; }
+
+    .card { background: white; border: 1px solid #e0e0e0; padding: 12px; margin-bottom: 12px; border-radius: 6px; }
+    .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+    .running { background-color: #28a745; }
+    .stopped { background-color: #dc3545; }
+    .nav-btn { background: #007acc; color: white; border: none; padding: 6px 14px; cursor: pointer; font-size: 11px; border-radius: 3px; margin: 2px; text-transform: uppercase; }
+    .mode-toggle { background: #6f42c1; }
+    .if-text { fill: #d63384; font-size: 10px; font-weight: bold; pointer-events: none; font-family: monospace; }
+    .overlay-link { stroke-dasharray: 5,5; stroke-width: 4; stroke-opacity: 0.8; }
   </style>
 </head>
 <body>
-
-<h3>Upload YAML</h3>
-<input type="file" id="yamlFile"/>
-<button onclick="uploadYaml()">Upload</button>
-
-<h2>Topology</h2>
-<svg id="topo" width="1000" height="500"></svg>
-
-<h2>Containers</h2>
-<div id="nodes"></div>
-
+<header>
+  <div><strong>Containerlab Designer</strong></div>
+  <div>
+    <input type="file" id="yamlFile" style="font-size:12px;"/>
+    <button class="nav-btn" onclick="uploadYaml()">Render Topology</button>
+    <button class="nav-btn mode-toggle" id="toggleMode" onclick="toggleView()">Switch to Ghostwire</button>
+  </div>
+</header>
+<div class="main">
+  <div id="canvas-area">
+    <div id="protocol-panel">
+      <strong>Debug Protocols:</strong><br/>
+      <button id="btn-bgp" class="proto-btn" onclick="toggleProto('bgp')">BGP</button>
+      <button id="btn-vxlan" class="proto-btn" onclick="toggleProto('vxlan')">VXLAN</button>
+      <button id="btn-ospf" class="proto-btn" onclick="toggleProto('ospf')">OSPF</button>
+      <button id="btn-isis" class="proto-btn" onclick="toggleProto('isis')">ISIS</button>
+    </div>
+    <svg id="topo"></svg>
+    <iframe id="ghostwire-frame" src="http://localhost:5000"></iframe>
+  </div>
+  <div id="sidebar"><h4>Live Lab Nodes</h4><div id="nodes-list"></div></div>
+</div>
 <script>
-async function uploadYaml(){
-  const f = document.getElementById("yamlFile").files[0];
-  const t = await f.text();
+let simulation, graphData = { nodes: [], links: [] }, isGhostwire = false;
+let activeProtos = { bgp: false, vxlan: false, ospf: false, isis: false };
 
-  await fetch("/upload-yaml",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({yaml:t})
-  });
+function toggleView() {
+  const svg = document.getElementById("topo"), iframe = document.getElementById("ghostwire-frame"), btn = document.getElementById("toggleMode"), panel = document.getElementById("protocol-panel");
+  isGhostwire = !isGhostwire;
+  svg.style.display = isGhostwire ? "none" : "block";
+  panel.style.display = isGhostwire ? "none" : "block";
+  iframe.style.display = isGhostwire ? "block" : "none";
+  btn.innerText = isGhostwire ? "Switch to Traditional Canvas" : "Switch to Ghostwire";
+  if(!isGhostwire && graphData.nodes.length) draw();
+}
 
+function toggleProto(p) {
+  activeProtos[p] = !activeProtos[p];
+  document.getElementById(`btn-${p}`).classList.toggle(`active-${p}`);
   draw();
 }
 
-// -------- Graph --------
 async function draw(){
-  const {nodes,links} = await (await fetch("/topology-graph")).json();
+  const canvas = document.getElementById("canvas-area");
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const resp = await fetch("/topology-graph");
+  graphData = await resp.json();
+  if(!graphData.nodes.length) return;
 
   const svg = d3.select("#topo");
   svg.selectAll("*").remove();
-
   const g = svg.append("g");
+  svg.call(d3.zoom().on("zoom", e => g.attr("transform", e.transform)));
 
-  svg.call(d3.zoom().on("zoom", e=>g.attr("transform",e.transform)));
+  const visibleLinks = graphData.links.filter(l => l.type === 'physical' || activeProtos[l.type]);
 
-  const sim = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id(d=>d.id).distance(150).strength(1))
-    .force("charge", d3.forceManyBody().strength(-400))
-    .force("center", d3.forceCenter(500,250))
-    .velocityDecay(0.5);
+  simulation = d3.forceSimulation(graphData.nodes)
+    .force("link", d3.forceLink(visibleLinks).id(d=>d.id).distance(220))
+    .force("charge", d3.forceManyBody().strength(-2500))
+    .force("x", d3.forceX(w/2).strength(0.05)) 
+    .force("y", d3.forceY(d => d.type==="spine"? h*0.2 : d.type==="leaf"? h*0.5 : h*0.8).strength(3));
 
-  const link = g.selectAll("line").data(links).enter()
-    .append("line").attr("stroke","#999");
+  const link = g.selectAll(".line").data(visibleLinks).enter().append("line")
+    .attr("stroke", d => {
+        if (d.type === 'physical') return '#bbb';
+        if (d.type === 'bgp') return '#28a745';
+        if (d.type === 'vxlan') return '#007acc';
+        if (d.type === 'ospf') return '#fd7e14';
+        return '#6f42c1';
+    })
+    .attr("stroke-width", d => d.type === 'physical' ? 2 : 4)
+    .attr("class", d => d.type !== 'physical' ? 'overlay-link' : '');
 
-  const label = g.selectAll("text.l").data(links).enter()
-    .append("text").text(d=>d.label).attr("font-size",10);
+  const sIfs = g.selectAll(".sif").data(visibleLinks.filter(l=>l.type==='physical')).enter().append("text").attr("class","if-text").text(d=>d.sourceIf);
+  const tIfs = g.selectAll(".tif").data(visibleLinks.filter(l=>l.type==='physical')).enter().append("text").attr("class","if-text").text(d=>d.targetIf);
 
-  const node = g.selectAll("g").data(nodes).enter().append("g")
-    .call(d3.drag()
-      .on("start",(e,d)=>{
-        d.fx=d.x; d.fy=d.y;
-        nodes.forEach(n=>{ if(n!==d){ n.fx=n.x; n.fy=n.y; }});
-      })
-      .on("drag",(e,d)=>{ d.fx=e.x; d.fy=e.y; })
-      .on("end",(e,d)=>{
-        d.fx=null; d.fy=null;
-        nodes.forEach(n=>{ if(n!==d){ n.fx=null; n.fy=null; }});
-      })
-    );
+  const node = g.selectAll(".n").data(graphData.nodes).enter().append("g")
+    .call(d3.drag().on("start",(e,d)=>{ if(!e.active) simulation.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; }).on("drag",(e,d)=>{ d.fx=e.x; d.fy=e.y; }).on("end",(e,d)=>{ if(!e.active) simulation.alphaTarget(0); d.fx=null; d.fy=null; }));
 
-  node.append("circle")
-    .attr("r",25)
-    .attr("fill",d=>d.type==="spine"?"orange":
-                       d.type==="leaf"?"skyblue":
-                       "lightgreen");
+  node.append("circle").attr("r",30).attr("fill",d=>d.type==="spine"?"#fd7e14":d.type==="leaf"?"#0dcaf0":"#20c997").attr("stroke","#fff").attr("stroke-width",3);
+  node.append("text").attr("text-anchor","middle").attr("dy",5).style("font-weight","bold").style("fill","#fff").text(d=>d.label.split('-').pop());
 
-  node.append("text")
-    .attr("text-anchor","middle")
-    .attr("dy",5)
-    .text(d=>d.label);
-
-  sim.on("tick",()=>{
-    link.attr("x1",d=>d.source.x)
-        .attr("y1",d=>d.source.y)
-        .attr("x2",d=>d.target.x)
-        .attr("y2",d=>d.target.y);
-
-    label.attr("x",d=>d.source.x*0.7+d.target.x*0.3)
-         .attr("y",d=>d.source.y*0.7+d.target.y*0.3);
-
-    node.attr("transform",d=>`translate(${d.x},${d.y})`);
+  simulation.on("tick", () => {
+    const findN = (id) => graphData.nodes.find(n => n.id === (id.id || id));
+    link.attr("x1", d => findN(d.source).x).attr("y1", d => findN(d.source).y).attr("x2", d => findN(d.target).x).attr("y2", d => findN(d.target).y);
+    sIfs.attr("x", d => findN(d.source).x + (findN(d.target).x - findN(d.source).x)*0.2).attr("y", d => findN(d.source).y + (findN(d.target).y - findN(d.source).y)*0.2);
+    tIfs.attr("x", d => findN(d.target).x + (findN(d.source).x - findN(d.target).x)*0.2).attr("y", d => findN(d.target).y + (findN(d.source).y - findN(d.target).y)*0.2);
+    node.attr("transform", d => `translate(${d.x},${d.y})`);
   });
 }
 
-// -------- Containers --------
-async function load(){
-  const data = await (await fetch("/containers")).json();
-  const div = document.getElementById("nodes");
-  div.innerHTML="";
+async function uploadYaml(){
+  const f = document.getElementById("yamlFile").files[0];
+  if(!f) return;
+  await fetch("/upload-yaml", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({yaml: await f.text()}) });
+  draw();
+}
 
+async function renderSidebar(data) {
+  const div = document.getElementById("nodes-list"); div.innerHTML = "";
   for(const n of data){
-    const el=document.createElement("div");
-    el.innerHTML=`
-      <b>${n.name}</b> (${n.state})<br/>
-      <button onclick="openT('${n.name}','bash')">Bash</button>
-      <button onclick="openT('${n.name}','vtysh')">vtysh</button>
-      <button onclick="openT('${n.name}','tcpdump')">TCPDump</button>
-      <hr/>
-    `;
+    const caps = await (await fetch(`/container-capabilities/${n.name}`)).json();
+    const el = document.createElement("div"); el.className = "card";
+    el.innerHTML = `<strong>${n.name}</strong> <span class="status-dot ${n.state==='running'?'running':'stopped'}"></span><br/>
+      <button class="nav-btn" onclick="window.open('/terminal.html?container=${n.name}&type=${caps.shell}')">TERM</button>
+      ${caps.vtysh ? `<button class="nav-btn" onclick="window.open('/terminal.html?container=${n.name}&type=vtysh')">VTYSH</button>` : ''}`;
     div.appendChild(el);
   }
 }
 
-function openT(c,t){
-  window.open(`/terminal.html?container=${c}&type=${t}`,"_blank");
+async function init(){
+  const containers = await (await fetch("/containers")).json();
+  renderSidebar(containers);
+  setTimeout(async () => {
+    const topoStatus = await (await fetch("/has-topology")).json();
+    if(topoStatus.loaded) draw();
+  }, 800);
 }
-
-load();
-draw();
+window.onload = init;
 </script>
-
 </body>
 </html>
