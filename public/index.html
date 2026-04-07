@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>EVPN Lab UI</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body { font-family: Arial; }
+    svg { border:1px solid #ccc; background:#f9f9f9; }
+  </style>
+</head>
+<body>
+
+<h3>Upload YAML</h3>
+<input type="file" id="yamlFile"/>
+<button onclick="uploadYaml()">Upload</button>
+
+<h2>Topology</h2>
+<svg id="topo" width="1000" height="500"></svg>
+
+<h2>Containers</h2>
+<div id="nodes"></div>
+
+<script>
+async function uploadYaml(){
+  const f = document.getElementById("yamlFile").files[0];
+  const t = await f.text();
+
+  await fetch("/upload-yaml",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({yaml:t})
+  });
+
+  draw();
+}
+
+// -------- Graph --------
+async function draw(){
+  const {nodes,links} = await (await fetch("/topology-graph")).json();
+
+  const svg = d3.select("#topo");
+  svg.selectAll("*").remove();
+
+  const g = svg.append("g");
+
+  svg.call(d3.zoom().on("zoom", e=>g.attr("transform",e.transform)));
+
+  const sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(d=>d.id).distance(150).strength(1))
+    .force("charge", d3.forceManyBody().strength(-400))
+    .force("center", d3.forceCenter(500,250))
+    .velocityDecay(0.5);
+
+  const link = g.selectAll("line").data(links).enter()
+    .append("line").attr("stroke","#999");
+
+  const label = g.selectAll("text.l").data(links).enter()
+    .append("text").text(d=>d.label).attr("font-size",10);
+
+  const node = g.selectAll("g").data(nodes).enter().append("g")
+    .call(d3.drag()
+      .on("start",(e,d)=>{
+        d.fx=d.x; d.fy=d.y;
+        nodes.forEach(n=>{ if(n!==d){ n.fx=n.x; n.fy=n.y; }});
+      })
+      .on("drag",(e,d)=>{ d.fx=e.x; d.fy=e.y; })
+      .on("end",(e,d)=>{
+        d.fx=null; d.fy=null;
+        nodes.forEach(n=>{ if(n!==d){ n.fx=null; n.fy=null; }});
+      })
+    );
+
+  node.append("circle")
+    .attr("r",25)
+    .attr("fill",d=>d.type==="spine"?"orange":
+                       d.type==="leaf"?"skyblue":
+                       "lightgreen");
+
+  node.append("text")
+    .attr("text-anchor","middle")
+    .attr("dy",5)
+    .text(d=>d.label);
+
+  sim.on("tick",()=>{
+    link.attr("x1",d=>d.source.x)
+        .attr("y1",d=>d.source.y)
+        .attr("x2",d=>d.target.x)
+        .attr("y2",d=>d.target.y);
+
+    label.attr("x",d=>d.source.x*0.7+d.target.x*0.3)
+         .attr("y",d=>d.source.y*0.7+d.target.y*0.3);
+
+    node.attr("transform",d=>`translate(${d.x},${d.y})`);
+  });
+}
+
+// -------- Containers --------
+async function load(){
+  const data = await (await fetch("/containers")).json();
+  const div = document.getElementById("nodes");
+  div.innerHTML="";
+
+  for(const n of data){
+    const el=document.createElement("div");
+    el.innerHTML=`
+      <b>${n.name}</b> (${n.state})<br/>
+      <button onclick="openT('${n.name}','bash')">Bash</button>
+      <button onclick="openT('${n.name}','vtysh')">vtysh</button>
+      <button onclick="openT('${n.name}','tcpdump')">TCPDump</button>
+      <hr/>
+    `;
+    div.appendChild(el);
+  }
+}
+
+function openT(c,t){
+  window.open(`/terminal.html?container=${c}&type=${t}`,"_blank");
+}
+
+load();
+draw();
+</script>
+
+</body>
+</html>
