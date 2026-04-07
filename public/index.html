@@ -4,7 +4,7 @@
   <title>Containerlab Designer</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
-    body { font-family: 'Segoe UI', sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    body { font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     header { background: #252526; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
     .main { display: flex; flex: 1; height: calc(100vh - 45px); }
     #canvas-area { flex: 0 0 75%; position: relative; background: #fff; border-right: 1px solid #ddd; }
@@ -12,63 +12,79 @@
     svg, #ghostwire-frame { width: 100%; height: 100%; border: none; }
     #ghostwire-frame { display: none; }
     
-    #protocol-panel { position: absolute; top: 15px; left: 15px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px; border: 1px solid #ccc; z-index: 5; }
-    .proto-btn { padding: 5px 10px; margin: 2px; font-size: 10px; border: 1px solid #444; border-radius: 4px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+    #protocol-panel { position: absolute; top: 15px; left: 15px; background: rgba(255,255,255,0.95); padding: 12px; border-radius: 8px; border: 1px solid #ccc; z-index: 5; width: 240px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
+    .proto-btn { padding: 6px 8px; margin: 2px; font-size: 10px; border: 1px solid #444; border-radius: 4px; cursor: pointer; font-weight: bold; }
     .active-bgp { background: #28a745; color: white; }
-    .active-vxlan { background: #007acc; color: white; }
     .active-ospf { background: #fd7e14; color: white; }
-    .active-isis { background: #6f42c1; color: white; }
+    .active-vxlan { background: #007acc; color: white; }
 
-    .card { background: white; border: 1px solid #e0e0e0; padding: 12px; margin-bottom: 12px; border-radius: 6px; }
-    .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; }
-    .running { background-color: #28a745; }
-    .stopped { background-color: #dc3545; }
-    .nav-btn { background: #007acc; color: white; border: none; padding: 6px 14px; cursor: pointer; font-size: 11px; border-radius: 3px; margin: 2px; text-transform: uppercase; }
-    .mode-toggle { background: #6f42c1; }
+    #peer-list { margin-top: 10px; font-size: 11px; max-height: 200px; overflow-y: auto; border-top: 1px solid #ddd; padding-top: 8px; font-family: monospace; }
+    .peer-entry { padding: 4px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+    .peer-up { color: #28a745; font-weight: bold; }
+    .peer-down { color: #dc3545; font-weight: bold; }
+
+    .card { background: white; border: 1px solid #e0e0e0; padding: 10px; margin-bottom: 10px; border-radius: 6px; }
+    .nav-btn { background: #007acc; color: white; border: none; padding: 5px 10px; cursor: pointer; font-size: 11px; border-radius: 3px; margin: 2px; }
     .if-text { fill: #d63384; font-size: 10px; font-weight: bold; pointer-events: none; font-family: monospace; }
-    .overlay-link { stroke-dasharray: 5,5; stroke-width: 4; stroke-opacity: 0.8; }
+    .live-link { stroke-dasharray: 10,5; stroke-width: 6; stroke-opacity: 0.8; animation: dash 2s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -15; } }
   </style>
 </head>
 <body>
 <header>
   <div><strong>Containerlab Designer</strong></div>
   <div>
-    <input type="file" id="yamlFile" style="font-size:12px;"/>
+    <input type="file" id="yamlFile" style="font-size:11px;"/>
     <button class="nav-btn" onclick="uploadYaml()">Render Topology</button>
-    <button class="nav-btn mode-toggle" id="toggleMode" onclick="toggleView()">Switch to Ghostwire</button>
+    <button id="view-toggle-btn" class="nav-btn" style="background:#6f42c1" onclick="toggleView()">Switch to Ghostwire</button>
   </div>
 </header>
 <div class="main">
   <div id="canvas-area">
     <div id="protocol-panel">
-      <strong>Debug Protocols:</strong><br/>
-      <button id="btn-bgp" class="proto-btn" onclick="toggleProto('bgp')">BGP</button>
-      <button id="btn-vxlan" class="proto-btn" onclick="toggleProto('vxlan')">VXLAN</button>
-      <button id="btn-ospf" class="proto-btn" onclick="toggleProto('ospf')">OSPF</button>
-      <button id="btn-isis" class="proto-btn" onclick="toggleProto('isis')">ISIS</button>
+      <strong>Observability:</strong>
+      <div style="display: flex; gap: 2px; margin-top: 5px;">
+        <button id="btn-bgp" class="proto-btn" onclick="toggleProto('bgp')">BGP</button>
+        <button id="btn-ospf" class="proto-btn" onclick="toggleProto('ospf')">OSPF</button>
+        <button id="btn-vxlan" class="proto-btn" onclick="toggleProto('vxlan')">VXLAN</button>
+      </div>
+      <div id="peer-list"></div>
     </div>
     <svg id="topo"></svg>
-    <iframe id="ghostwire-frame" src="http://localhost:5000"></iframe>
+    <iframe id="ghostwire-frame" src="http://localhost:5001"></iframe>
   </div>
-  <div id="sidebar"><h4>Live Lab Nodes</h4><div id="nodes-list"></div></div>
+  <div id="sidebar"><h4>Live Nodes</h4><div id="nodes-list"></div></div>
 </div>
 <script>
 let simulation, graphData = { nodes: [], links: [] }, isGhostwire = false;
-let activeProtos = { bgp: false, vxlan: false, ospf: false, isis: false };
+let livePeers = [], currentProto = null;
 
 function toggleView() {
-  const svg = document.getElementById("topo"), iframe = document.getElementById("ghostwire-frame"), btn = document.getElementById("toggleMode"), panel = document.getElementById("protocol-panel");
   isGhostwire = !isGhostwire;
-  svg.style.display = isGhostwire ? "none" : "block";
-  panel.style.display = isGhostwire ? "none" : "block";
-  iframe.style.display = isGhostwire ? "block" : "none";
-  btn.innerText = isGhostwire ? "Switch to Traditional Canvas" : "Switch to Ghostwire";
-  if(!isGhostwire && graphData.nodes.length) draw();
+  const btn = document.getElementById("view-toggle-btn");
+  
+  document.getElementById("topo").style.display = isGhostwire ? "none" : "block";
+  document.getElementById("protocol-panel").style.display = isGhostwire ? "none" : "block";
+  document.getElementById("ghostwire-frame").style.display = isGhostwire ? "block" : "none";
+  
+  // FIX: DYNAMIC BUTTON TEXT
+  btn.innerText = isGhostwire ? "Switch to Designer" : "Switch to Ghostwire";
 }
 
-function toggleProto(p) {
-  activeProtos[p] = !activeProtos[p];
-  document.getElementById(`btn-${p}`).classList.toggle(`active-${p}`);
+async function toggleProto(p) {
+  const peerDiv = document.getElementById("peer-list");
+  if (currentProto === p) {
+    currentProto = null;
+    document.getElementById(`btn-${p}`).classList.remove(`active-${p}`);
+    livePeers = []; peerDiv.innerHTML = "";
+  } else {
+    if (currentProto) document.getElementById(`btn-${currentProto}`).classList.remove(`active-${currentProto}`);
+    currentProto = p;
+    document.getElementById(`btn-${p}`).classList.add(`active-${p}`);
+    const resp = await fetch(`/protocol-status/${p}`);
+    livePeers = await resp.json();
+    peerDiv.innerHTML = livePeers.map(peer => `<div class="peer-entry"><span>${peer.node.split('-').pop()} ↔ ${peer.neighborIp}</span><span class="${peer.status === 'up' ? 'peer-up' : 'peer-down'}">${peer.status.toUpperCase()}</span></div>`).join('');
+  }
   draw();
 }
 
@@ -84,46 +100,48 @@ async function draw(){
   const g = svg.append("g");
   svg.call(d3.zoom().on("zoom", e => g.attr("transform", e.transform)));
 
-  const visibleLinks = graphData.links.filter(l => l.type === 'physical' || activeProtos[l.type]);
-
   simulation = d3.forceSimulation(graphData.nodes)
-    .force("link", d3.forceLink(visibleLinks).id(d=>d.id).distance(220))
-    .force("charge", d3.forceManyBody().strength(-2500))
-    .force("x", d3.forceX(w/2).strength(0.05)) 
-    .force("y", d3.forceY(d => d.type==="spine"? h*0.2 : d.type==="leaf"? h*0.5 : h*0.8).strength(3));
+    .force("link", d3.forceLink(graphData.links).id(d => d.id).distance(250))
+    .force("charge", d3.forceManyBody().strength(-2000))
+    .force("center", d3.forceCenter(w/2, h/2))
+    .force("y", d3.forceY(d => d.type === "spine" ? h*0.2 : d.type === "leaf" ? h*0.5 : h*0.8).strength(3));
 
-  const link = g.selectAll(".line").data(visibleLinks).enter().append("line")
-    .attr("stroke", d => {
-        if (d.type === 'physical') return '#bbb';
-        if (d.type === 'bgp') return '#28a745';
-        if (d.type === 'vxlan') return '#007acc';
-        if (d.type === 'ospf') return '#fd7e14';
-        return '#6f42c1';
-    })
-    .attr("stroke-width", d => d.type === 'physical' ? 2 : 4)
-    .attr("class", d => d.type !== 'physical' ? 'overlay-link' : '');
+  const link = g.selectAll("line.base").data(graphData.links).enter().append("line").attr("stroke", "#bbb").attr("stroke-width", 2);
 
-  const sIfs = g.selectAll(".sif").data(visibleLinks.filter(l=>l.type==='physical')).enter().append("text").attr("class","if-text").text(d=>d.sourceIf);
-  const tIfs = g.selectAll(".tif").data(visibleLinks.filter(l=>l.type==='physical')).enter().append("text").attr("class","if-text").text(d=>d.targetIf);
+  // RESTORED INTERFACE LABELS (PINK)
+  const sIfs = g.selectAll(".sif").data(graphData.links).enter().append("text").attr("class","if-text").text(d=>d.sourceIf);
+  const tIfs = g.selectAll(".tif").data(graphData.links).enter().append("text").attr("class","if-text").text(d=>d.targetIf);
+
+  if (currentProto && currentProto !== 'vxlan') {
+    g.selectAll("line.live").data(graphData.links).enter().append("line").attr("class", "live-link")
+      .attr("stroke", l => {
+        const s = l.source.id || l.source; const t = l.target.id || l.target;
+        const peer = livePeers.find(p => s.includes(p.node) || t.includes(p.node));
+        if(!peer) return "transparent";
+        return peer.status === 'up' ? (currentProto === 'bgp' ? '#28a745' : '#fd7e14') : '#dc3545';
+      });
+  }
 
   const node = g.selectAll(".n").data(graphData.nodes).enter().append("g")
-    .call(d3.drag().on("start",(e,d)=>{ if(!e.active) simulation.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; }).on("drag",(e,d)=>{ d.fx=e.x; d.fy=e.y; }).on("end",(e,d)=>{ if(!e.active) simulation.alphaTarget(0); d.fx=null; d.fy=null; }));
+    .call(d3.drag().on("start", (e,d) => { if(!e.active) simulation.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; }).on("drag", (e,d) => { d.fx=e.x; d.fy=e.y; }).on("end", (e,d) => { if(!e.active) simulation.alphaTarget(0); d.fx=null; d.fy=null; }));
 
-  node.append("circle").attr("r",30).attr("fill",d=>d.type==="spine"?"#fd7e14":d.type==="leaf"?"#0dcaf0":"#20c997").attr("stroke","#fff").attr("stroke-width",3);
-  node.append("text").attr("text-anchor","middle").attr("dy",5).style("font-weight","bold").style("fill","#fff").text(d=>d.label.split('-').pop());
+  node.append("circle").attr("r", 25).attr("fill", d => d.type === "spine" ? "#fd7e14" : d.type === "leaf" ? "#0dcaf0" : "#20c997").attr("stroke", "#fff").attr("stroke-width", 2);
+  node.append("text").attr("text-anchor", "middle").attr("dy", 5).style("font-weight", "bold").style("fill", "#fff").style("font-size", "10px").text(d => d.label.split('-').pop());
 
   simulation.on("tick", () => {
-    const findN = (id) => graphData.nodes.find(n => n.id === (id.id || id));
-    link.attr("x1", d => findN(d.source).x).attr("y1", d => findN(d.source).y).attr("x2", d => findN(d.target).x).attr("y2", d => findN(d.target).y);
-    sIfs.attr("x", d => findN(d.source).x + (findN(d.target).x - findN(d.source).x)*0.2).attr("y", d => findN(d.source).y + (findN(d.target).y - findN(d.source).y)*0.2);
-    tIfs.attr("x", d => findN(d.target).x + (findN(d.source).x - findN(d.target).x)*0.2).attr("y", d => findN(d.target).y + (findN(d.source).y - findN(d.target).y)*0.2);
+    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    g.selectAll(".live-link").attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    
+    // POSITION INTERFACE LABELS
+    sIfs.attr("x", d => d.source.x + (d.target.x - d.source.x) * 0.2).attr("y", d => d.source.y + (d.target.y - d.source.y) * 0.2);
+    tIfs.attr("x", d => d.target.x + (d.source.x - d.target.x) * 0.2).attr("y", d => d.target.y + (d.source.y - d.target.y) * 0.2);
+    
     node.attr("transform", d => `translate(${d.x},${d.y})`);
   });
 }
 
 async function uploadYaml(){
-  const f = document.getElementById("yamlFile").files[0];
-  if(!f) return;
+  const f = document.getElementById("yamlFile").files[0]; if(!f) return;
   await fetch("/upload-yaml", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({yaml: await f.text()}) });
   draw();
 }
@@ -133,9 +151,9 @@ async function renderSidebar(data) {
   for(const n of data){
     const caps = await (await fetch(`/container-capabilities/${n.name}`)).json();
     const el = document.createElement("div"); el.className = "card";
-    el.innerHTML = `<strong>${n.name}</strong> <span class="status-dot ${n.state==='running'?'running':'stopped'}"></span><br/>
+    el.innerHTML = `<strong>${n.name}</strong><br/>
       <button class="nav-btn" onclick="window.open('/terminal.html?container=${n.name}&type=${caps.shell}')">TERM</button>
-      ${caps.vtysh ? `<button class="nav-btn" onclick="window.open('/terminal.html?container=${n.name}&type=vtysh')">VTYSH</button>` : ''}`;
+      ${caps.vtysh ? `<button class="nav-btn" style="background:#444" onclick="window.open('/terminal.html?container=${n.name}&type=vtysh')">VTYSH</button>` : ''}`;
     div.appendChild(el);
   }
 }
@@ -143,10 +161,7 @@ async function renderSidebar(data) {
 async function init(){
   const containers = await (await fetch("/containers")).json();
   renderSidebar(containers);
-  setTimeout(async () => {
-    const topoStatus = await (await fetch("/has-topology")).json();
-    if(topoStatus.loaded) draw();
-  }, 800);
+  setTimeout(async () => { if((await (await fetch("/has-topology")).json()).loaded) draw(); }, 1000);
 }
 window.onload = init;
 </script>
