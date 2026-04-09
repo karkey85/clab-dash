@@ -1,0 +1,101 @@
+name: evpn-lab
+
+topology:
+  nodes:
+    # --- SPINES (AS 65000) ---
+    spine1:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - configs/spine1.conf:/etc/frr/frr.conf
+        - configs/daemons:/etc/frr/daemons
+      exec:
+        - sysctl -w net.ipv6.conf.all.disable_ipv6=0
+        - ip link add loop0 type dummy
+        - ip addr add 10.0.0.101/32 dev loop0
+        - ip link set loop0 up
+        - ip link set eth1 up
+        - ip link set eth2 up
+        - sh -c "nohup /install_tcpdump.sh > /var/log/install_tcpdump.log 2>&1 &"
+
+    spine2:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - configs/spine2.conf:/etc/frr/frr.conf
+        - configs/daemons:/etc/frr/daemons
+      exec:
+        - sysctl -w net.ipv6.conf.all.disable_ipv6=0
+        - ip link add loop0 type dummy
+        - ip addr add 10.0.0.102/32 dev loop0
+        - ip link set loop0 up
+        - ip link set eth1 up
+        - ip link set eth2 up
+        - sh -c "nohup /install_tcpdump.sh > /var/log/install_tcpdump.log 2>&1 &"
+
+    # --- LEAFS (AS 65001 & 65002) ---
+    leaf1:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - configs/leaf1.conf:/etc/frr/frr.conf
+        - configs/daemons:/etc/frr/daemons
+      exec:
+        - sysctl -w net.ipv6.conf.all.disable_ipv6=0
+        - ip link add loop0 type dummy
+        - ip addr add 10.0.0.1/32 dev loop0
+        - ip link set loop0 up
+        # Create VXLAN VTEP and Bridge in Bash
+        - ip link add vxlan10 type vxlan id 10 local 10.0.0.1 dstport 4789
+        - ip link add name br0 type bridge
+        - ip link set vxlan10 master br0
+        - ip link set eth3 master br0
+        - ip link set eth1 up
+        - ip link set eth2 up
+        - ip link set eth3 up
+        - ip link set vxlan10 up
+        - ip link set br0 up
+        - sh -c "nohup /install_tcpdump.sh > /var/log/install_tcpdump.log 2>&1 &"
+
+    leaf2:
+      kind: linux
+      image: frrouting/frr:latest
+      binds:
+        - configs/leaf2.conf:/etc/frr/frr.conf
+        - configs/daemons:/etc/frr/daemons
+      exec:
+        - sysctl -w net.ipv6.conf.all.disable_ipv6=0
+        - ip link add loop0 type dummy
+        - ip addr add 10.0.0.2/32 dev loop0
+        - ip link set loop0 up
+        # Create VXLAN VTEP and Bridge in Bash
+        - ip link add vxlan10 type vxlan id 10 local 10.0.0.2 dstport 4789
+        - ip link add name br0 type bridge
+        - ip link set vxlan10 master br0
+        - ip link set eth3 master br0
+        - ip link set eth1 up
+        - ip link set eth2 up
+        - ip link set eth3 up
+        - ip link set vxlan10 up
+        - ip link set br0 up
+        - sh -c "nohup /install_tcpdump.sh > /var/log/install_tcpdump.log 2>&1 &"
+
+    # --- CLIENTS ---
+    client1:
+      kind: linux
+      image: alpine:latest
+      exec:
+        - ip addr add 192.168.10.1/24 dev eth1
+    client2:
+      kind: linux
+      image: alpine:latest
+      exec:
+        - ip addr add 192.168.10.2/24 dev eth1
+
+  links:
+    - endpoints: ["leaf1:eth1", "spine1:eth1"]
+    - endpoints: ["leaf1:eth2", "spine2:eth1"]
+    - endpoints: ["leaf2:eth1", "spine1:eth2"]
+    - endpoints: ["leaf2:eth2", "spine2:eth2"]
+    - endpoints: ["client1:eth1", "leaf1:eth3"]
+    - endpoints: ["client2:eth1", "leaf2:eth3"]
